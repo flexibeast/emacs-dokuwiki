@@ -4,6 +4,7 @@
 ;; additional edits
 ;;   2021 vincowl
 ;;   2018, 2023 WillForan
+;;   2023 flexibeast
 
 ;; Author: Juan Karlo Licudine <accidentalrebel@gmail.com>
 ;; URL: http://www.github.com/accidentalrebel/emacs-dokuwiki
