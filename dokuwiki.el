@@ -178,7 +178,15 @@ is saved as \"wikiurl.com/wiki-page\".  On the other hand, a buffer of
 ;; Helpers
 (defun dokuwiki--credentials ()
   "Read dokuwiki credentials either from auth source or from the user input."
-  (let ((auth-source-credentials (nth 0 (auth-source-search :max 1 :host (dokuwiki--get-xml-rpc-url) :require '(:user :secret)))))
+  (let* ((parsed-uri (url-generic-parse-url (dokuwiki--get-xml-rpc-url)))
+         (auth-source-credentials
+          (nth
+           0
+           (auth-source-search
+            :max 1
+            :host (url-host parsed-uri)
+            :port (url-port parsed-uri)
+            :require '(:user :secret)))))
     (if auth-source-credentials
         (let* ((user (plist-get auth-source-credentials :user))
                (password-raw (plist-get auth-source-credentials :secret))
