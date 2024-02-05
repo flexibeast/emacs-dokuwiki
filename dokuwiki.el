@@ -4,7 +4,7 @@
 ;; additional edits
 ;;   2021 vincowl
 ;;   2018, 2023 WillForan
-;;   2023 flexibeast
+;;   2023-2024 Alexis <flexibeast@gmail.com>
 
 ;; Author: Juan Karlo Licudine <accidentalrebel@gmail.com>
 ;; URL: http://www.github.com/accidentalrebel/emacs-dokuwiki
@@ -55,6 +55,23 @@
   :group 'dokuwiki
   :type 'string)
 
+(defcustom dokuwiki-local-directory
+  (cond
+   ((eq system-type 'windows-nt)
+    (substitute-in-file-name
+     "%APPDATA%\dokuwiki\\"))
+   ((getenv "XDG_DATA_HOME")
+    (substitute-in-file-name
+     "$XDG_DATA_HOME/dokuwiki/"))
+   ((getenv "HOME")
+    (substitute-in-file-name
+     "$HOME/dokuwiki/"))
+   (t
+    "./dokuwiki/"))
+  "Directory in which to save local copies of DokuWiki pages."
+  :group 'dokuwiki
+  :type 'directory)
+
 (defcustom dokuwiki-login-user-name ""
   "The user name to use when logging in to the wiki."
   :group 'dokuwiki
@@ -65,8 +82,36 @@
   :group 'dokuwiki
   :type '(repeat function))
 
+(defcustom dokuwiki-preferred-mode-alist nil
+  "Alist of major modes to use when a predicate is true, together with
+the relevant extension.
+
+Each entry in the alist must be of the form:
+
+  (MODE (PREDICATE . EXT))
+
+where MODE is a major mode, PREDICATE is a function that returns t if
+a page should be opened in that mode, and EXT is a string containing
+the file extension to use with that mode. For example:
+
+  (gemini-mode (dokuwiki-gemini-p . \"gmi\")))"
+  :type '(alist
+          :key-type function
+          :value-type (list function string)))
+
+(defcustom dokuwiki-save-local-copy nil
+  "Whether to save a copy of the page into `dokuwiki-local-directory'
+when saving."
+  :group 'dokuwiki
+  :type 'boolean)
+
 (defcustom dokuwiki-use-dokuwiki-mode t
   "Whether to enable `dokuwiki-mode' upon opening a wiki page."
+  :group 'dokuwiki
+  :type 'boolean)
+
+(defcustom dokuwiki-use-preferred-modes nil
+  "Whether to use `dokuwiki-preferred-mode-alist' when editing wiki pages."
   :group 'dokuwiki
   :type 'boolean)
 
@@ -123,7 +168,39 @@ buffer is saved."
       (erase-buffer)
       (if page-content (insert page-content) (dokuwiki--insert-top-heading page-name))
       (goto-char (point-min))
+      (if dokuwiki-use-preferred-modes
+          (progn
+            (dokuwiki--create-preferred-mode-maps)
+            (dokuwiki--enable-preferred-mode)))
       (run-hooks #'dokuwiki-page-opened-hook))))
+
+(defun dokuwiki-save ()
+  "Wrapper for `dokuwiki-save-page', saving local copy of page if
+`dokuwiki-save-local-copy' is set to t."
+  (interactive)
+  (if (not dokuwiki-save-local-copy)
+      (dokuwiki-save-page)
+    (let* ((mode major-mode)
+           (bfr-name (buffer-name))
+           (_ (string-match "^\\(.+\\):\\(.+\\)\\.dwiki$" bfr-name))
+           (page-name (match-string 2 bfr-name))
+           (namespace (split-string (match-string 1 bfr-name) ":"))
+           (dir (apply
+                 #'file-name-concat
+                 dokuwiki-local-directory
+                 namespace))
+           (ext (or (let (value)
+                      (dolist (entry dokuwiki-preferred-mode-alist)
+                        (if (eq (car entry) mode)
+                            (setq value (cadadr entry))))
+                      value)
+                    "dwiki"))
+           (file (concat page-name "." ext)))
+      (make-directory dir t) ; Create parent dir(s) if necessary.
+      (write-file (file-name-concat dir file))
+      (set-visited-file-name bfr-name)
+      (funcall mode)
+      (dokuwiki-save-page))))
 
 (defun dokuwiki-save-page ()
   "Save the current buffer as a page in the wiki.
@@ -139,12 +216,12 @@ is saved as \"wikiurl.com/wiki-page\".  On the other hand, a buffer of
       (let ((page-name (replace-regexp-in-string ".dwiki" "" (buffer-name))))
 	(if (not (y-or-n-p (concat "Do you want to save the page \"" page-name "\"?")))
 	    (message "Cancelled saving of the page."))
-	 (let* ((summary (read-string "Summary: "))
-		(minor (y-or-n-p "Is this a minor change? "))
-		(save-success (xml-rpc-method-call dokuwiki-xml-rpc-url 'wiki.putPage page-name (buffer-string) `(("sum" . ,summary) ("minor" . ,minor)))))
-	   (if save-success
-	       (message "Saving successful with summary %s and minor of %s." summary minor)
-	     (error "Saving unsuccessful!")))))))
+	(let* ((summary (read-string "Summary: "))
+	       (minor (y-or-n-p "Is this a minor change? "))
+	       (save-success (xml-rpc-method-call dokuwiki-xml-rpc-url 'wiki.putPage page-name (buffer-string) `(("sum" . ,summary) ("minor" . ,minor)))))
+	  (if save-success
+	      (message "Saving successful with summary %s and minor of %s." summary minor)
+	    (error "Saving unsuccessful!")))))))
 
 (defun dokuwiki-get-wiki-title ()
   "Gets the title of the current wiki."
@@ -177,6 +254,23 @@ is saved as \"wikiurl.com/wiki-page\".  On the other hand, a buffer of
   (insert (concat "[[" (completing-read "Select a page to link: " (dokuwiki-get-page-list)) "]]")))
 
 ;; Helpers
+
+(defun dokuwiki--create-preferred-mode-maps ()
+  "Create keymaps for editing a page with a particular mode by
+inheriting the usual keymap for that mode, but binding \\`C-x C-s' to
+the `dokuwiki-save' wrapper function."
+  (if dokuwiki-preferred-mode-alist
+      (dolist (entry dokuwiki-preferred-mode-alist)
+        (let* ((mode (car entry))
+               (mode-name (symbol-name mode))
+               (root (substring mode-name 0 -5))
+               (sym (intern (concat "dokuwiki-" root "-map"))))
+          (set sym (make-sparse-keymap))
+          (set-keymap-parent (symbol-value sym)
+                             (symbol-value (intern (concat mode-name "-map"))))
+          (keymap-set (symbol-value sym)
+                      "C-x C-s" #'dokuwiki-save)))))
+
 (defun dokuwiki--credentials ()
   "Read dokuwiki credentials either from auth source or from the user input."
   (let* ((parsed-uri (url-generic-parse-url (dokuwiki--get-xml-rpc-url)))
@@ -196,6 +290,21 @@ is saved as \"wikiurl.com/wiki-page\".  On the other hand, a buffer of
       (let ((user (dokuwiki--get-login-user-name))
             (password (read-passwd "Enter password: ")))
         (list :user user :password password)))))
+
+(defun dokuwiki--enable-preferred-mode ()
+  "If the predicate associated with an entry in `dokuwiki-preferred-mode-alist'
+returns t, enable the major mode specified by that entry."
+  (dolist (entry dokuwiki-preferred-mode-alist)
+    (let ((mode (car entry))
+          (fun (caadr entry)))
+      (if (funcall fun)
+          (progn
+            (funcall mode)
+            (let* ((mode-name (symbol-name mode))
+                   (root (substring mode-name 0 -5)))
+              (use-local-map
+               (symbol-value
+                (intern (concat "dokuwiki-" root "-map"))))))))))
 
 (defun dokuwiki--get-xml-rpc-url ()
   "Gets the xml-rpc to be used for logging in."
@@ -219,15 +328,15 @@ is saved as \"wikiurl.com/wiki-page\".  On the other hand, a buffer of
 
 (defun dokuwiki-pages-get-list-cache ( &optional refresh)
   "Get list of page; if cache is unset or REFRESH, fetch."
-  (when (or (not dokuwiki-cached-page-list) refresh)
-      (if (not dokuwiki--has-successfully-logged-in)
-        (user-error "Login first before listing the pages")
-        (let ((page-detail-list (xml-rpc-method-call dokuwiki-xml-rpc-url 'wiki.getAllPages))
-              (page-list ()))
-          (dolist (page-detail page-detail-list)
-            (push (concat ":" (cdr (assoc "id" page-detail))) page-list))
-          (setq dokuwiki-cached-page-list page-list))))
-      dokuwiki-cached-page-list)
+(when (or (not dokuwiki-cached-page-list) refresh)
+  (if (not dokuwiki--has-successfully-logged-in)
+      (user-error "Login first before listing the pages")
+    (let ((page-detail-list (xml-rpc-method-call dokuwiki-xml-rpc-url 'wiki.getAllPages))
+          (page-list ()))
+      (dolist (page-detail page-detail-list)
+        (push (concat ":" (cdr (assoc "id" page-detail))) page-list))
+      (setq dokuwiki-cached-page-list page-list))))
+dokuwiki-cached-page-list)
 
 (defun dokuwiki-insert-link-from-cache ()
   "Show a selectable list containing pages from the current wiki.
