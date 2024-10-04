@@ -32,7 +32,7 @@ This package is on melpa as `dokuwiki`! The easiest way to get it is with [`use-
       (flyspell-mode 1)))))
 ```
 
-Alternatively, you can `git clone https://github.com/accidentalrebel/emacs-dokuwiki.git ~/.emacs.d/dokuwiki` with `(require 'dokuwiki)` in `~/.emacs.d/init.el` and manage configation as you please.
+Alternatively, you can `git clone https://github.com/flexibeast/emacs-dokuwiki.git ~/.emacs.d/dokuwiki` with `(require 'dokuwiki)` in `~/.emacs.d/init.el` and manage configation as you please.
 
 ## Dependencies ##
   * The latest version of XML-RPC.el.
